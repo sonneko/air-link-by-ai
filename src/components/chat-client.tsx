@@ -77,6 +77,15 @@ const decompress = (base64Data: string): string => {
   }
 };
 
+const isValidJson = (str: string) => {
+  try {
+    JSON.parse(str);
+  } catch (e) {
+    return false;
+  }
+  return true;
+}
+
 export default function ChatClient() {
   const { toast } = useToast();
   const [isMounted, setIsMounted] = useState(false);
@@ -177,10 +186,14 @@ export default function ChatClient() {
     const dc = peerConnection.createDataChannel("chat");
     setupDataChannel(dc);
     
-    const candidates: RTCIceCandidate[] = [];
+    const candidates: Partial<RTCIceCandidate>[] = [];
     peerConnection.onicecandidate = (event) => {
       if (event.candidate) {
-        candidates.push(event.candidate);
+        candidates.push({
+          candidate: event.candidate.candidate,
+          sdpMid: event.candidate.sdpMid,
+          sdpMLineIndex: event.candidate.sdpMLineIndex,
+        });
       }
     };
 
@@ -230,8 +243,12 @@ export default function ChatClient() {
     }
     
     try {
-      const decompressedInfo = decompress(pastedInfo);
-      const offerPayload = JSON.parse(decompressedInfo);
+      let info = pastedInfo;
+      if (!isValidJson(info)) {
+        info = decompress(pastedInfo);
+      }
+      
+      const offerPayload = JSON.parse(info);
       if (!offerPayload.sdp || !offerPayload.candidates) {
         throw new Error("Invalid session info");
       }
@@ -243,10 +260,14 @@ export default function ChatClient() {
         setupDataChannel(event.channel);
       };
 
-      const candidates: RTCIceCandidate[] = [];
+      const candidates: Partial<RTCIceCandidate>[] = [];
       peerConnection.onicecandidate = (event) => {
         if (event.candidate) {
-          candidates.push(event.candidate);
+          candidates.push({
+            candidate: event.candidate.candidate,
+            sdpMid: event.candidate.sdpMid,
+            sdpMLineIndex: event.candidate.sdpMLineIndex,
+          });
         }
       };
 
@@ -286,8 +307,11 @@ export default function ChatClient() {
   const completeJoin = useCallback(async () => {
     if(!pastedInfo) return;
     try {
-      const decompressedInfo = decompress(pastedInfo);
-      const answerPayload = JSON.parse(decompressedInfo);
+      let info = pastedInfo;
+      if (!isValidJson(info)) {
+        info = decompress(pastedInfo);
+      }
+      const answerPayload = JSON.parse(info);
        if (!answerPayload.sdp || !answerPayload.candidates) {
         throw new Error("Invalid session info");
       }
@@ -428,7 +452,11 @@ export default function ChatClient() {
                     <DialogTitle>Scan Friend's QR Code</DialogTitle>
                   </DialogHeader>
                   <Scanner
-                    onScan={(result) => handleScannedData(result)}
+                    onScan={(result) => {
+                      if (result && result.length > 0 && result[0].rawValue) {
+                        setPastedInfo(result[0].rawValue);
+                      }
+                    }}
                     onError={(error) => console.log(error?.message)}
                   />
                 </DialogContent>
@@ -610,7 +638,27 @@ export default function ChatClient() {
 
   // Prevent SSR until component is mounted
   if (!isMounted) {
-    return null;
+    return (
+      <Card>
+        <CardHeader>
+          <div className="flex items-center gap-3">
+            <div className="p-3 rounded-lg bg-primary/20 text-primary">
+              <MessageSquare className="w-8 h-8" />
+            </div>
+            <div>
+              <CardTitle className="text-2xl font-bold">WebRTCSpeak</CardTitle>
+              <CardDescription>Ad-hoc, direct & private chat.</CardDescription>
+            </div>
+          </div>
+        </CardHeader>
+        <CardContent className="space-y-6">
+          <div className="flex items-center justify-center space-x-2 text-muted-foreground pt-4">
+            <Loader2 className="animate-spin h-5 w-5" />
+            <span>Loading...</span>
+          </div>
+        </CardContent>
+      </Card>
+    );
   }
 
   switch (mode) {
