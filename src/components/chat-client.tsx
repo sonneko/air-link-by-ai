@@ -4,7 +4,7 @@ import { useState, useRef, useEffect, useCallback } from "react";
 import { useToast } from "@/hooks/use-toast";
 import QRCode from "qrcode.react";
 import pako from "pako";
-import { Scanner } from "@yudiel/react-qr-scanner";
+import { Scanner, type IDetectedBarcode } from "@yudiel/react-qr-scanner";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -205,23 +205,19 @@ export default function ChatClient() {
 
   }, [startPeerConnection, setupDataChannel]);
 
-  const handleScannedData = (data: string | {data: string}[]) => {
-    let scannedData: string;
-    if (typeof data === 'string') {
-      scannedData = data;
-    } else if (Array.isArray(data) && data.length > 0 && typeof data[0].data === 'string') {
-      scannedData = data[0].data;
+  const handleScannedData = (result: IDetectedBarcode[]) => {
+    if (result && result.length > 0 && result[0].rawValue) {
+      const scannedData = result[0].rawValue;
+      setPastedInfo(scannedData);
+      setMode("joining");
     } else {
-      console.error("Invalid scan result format", data);
+      console.error("Invalid scan result format", result);
       toast({
         title: "Scan Error",
         description: "Could not read QR code. The format is invalid.",
         variant: "destructive",
       });
-      return;
     }
-    setPastedInfo(scannedData);
-    setMode("joining");
   };
 
   const joinSession = useCallback(async () => {
