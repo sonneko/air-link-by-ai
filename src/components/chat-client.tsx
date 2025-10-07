@@ -1,17 +1,6 @@
 "use client";
 
 import { useState, useRef, useEffect, useCallback } from "react";
-import {
-  doc,
-  getDoc,
-  setDoc,
-  collection,
-  addDoc,
-  onSnapshot,
-  updateDoc,
-  deleteDoc,
-} from "firebase/firestore";
-import { db } from "@/lib/firebase";
 import { useToast } from "@/hooks/use-toast";
 
 import { Button } from "@/components/ui/button";
@@ -26,6 +15,7 @@ import {
 } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { Textarea } from "@/components/ui/textarea";
 import {
   Copy,
   Send,
@@ -34,6 +24,7 @@ import {
   CheckCircle2,
   XCircle,
   Link as LinkIcon,
+  ArrowLeft,
 } from "lucide-react";
 
 const servers = {
@@ -45,7 +36,7 @@ const servers = {
   iceCandidatePoolSize: 10,
 };
 
-type AppMode = "home" | "waiting" | "chatting";
+type AppMode = "home" | "creating" | "joining" | "chatting";
 type ConnectionStatus = "disconnected" | "connecting" | "connected" | "failed";
 type Message = {
   text: string;
@@ -57,16 +48,18 @@ export default function ChatClient() {
   const { toast } = useToast();
 
   const [mode, setMode] = useState<AppMode>("home");
-  const [myId, setMyId] = useState<string>("");
-  const [friendId, setFriendId] = useState<string>("");
   const [messages, setMessages] = useState<Message[]>([]);
   const [currentMessage, setCurrentMessage] = useState<string>("");
   const [connectionStatus, setConnectionStatus] =
     useState<ConnectionStatus>("disconnected");
+    
+  const [offer, setOffer] = useState('');
+  const [answer, setAnswer] = useState('');
+  const [pastedInfo, setPastedInfo] = useState('');
+
 
   const pc = useRef<RTCPeerConnection | null>(null);
   const dataChannel = useRef<RTCDataChannel | null>(null);
-  const unsubscribe = useRef<() => void>(() => {});
   const scrollAreaRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -81,7 +74,7 @@ export default function ChatClient() {
     }
   }, [messages]);
 
-  const cleanup = useCallback(async () => {
+  const cleanup = useCallback(() => {
     if (pc.current) {
       pc.current.close();
       pc.current = null;
@@ -90,23 +83,15 @@ export default function ChatClient() {
       dataChannel.current.close();
       dataChannel.current = null;
     }
-    unsubscribe.current();
 
-    if (myId) {
-      const sessionRef = doc(db, 'sessions', myId);
-      const sessionDoc = await getDoc(sessionRef);
-      if (sessionDoc.exists()) {
-        await deleteDoc(sessionRef);
-      }
-    }
-
-    setMyId('');
-    setFriendId('');
     setMessages([]);
     setCurrentMessage('');
     setConnectionStatus('disconnected');
     setMode('home');
-  }, [myId]);
+    setOffer('');
+    setAnswer('');
+    setPastedInfo('');
+  }, []);
 
   const startPeerConnection = useCallback(() => {
     const peerConnection = new RTCPeerConnection(servers);
@@ -128,19 +113,19 @@ export default function ChatClient() {
         });
       }
     };
+    return peerConnection;
   }, [cleanup, toast]);
   
-  const setupDataChannel = useCallback(() => {
-    if (!dataChannel.current) return;
-
-    dataChannel.current.onopen = () => {
+  const setupDataChannel = useCallback((channel: RTCDataChannel) => {
+    dataChannel.current = channel;
+    channel.onopen = () => {
       setConnectionStatus("connected");
       setMode("chatting");
     };
-    dataChannel.current.onclose = () => {
+    channel.onclose = () => {
       cleanup();
     };
-    dataChannel.current.onmessage = (event) => {
+    channel.onmessage = (event) => {
       const receivedMessage: Message = JSON.parse(event.data);
       setMessages((prev) => [...prev, receivedMessage]);
     };
@@ -148,114 +133,122 @@ export default function ChatClient() {
 
   const createSession = useCallback(async () => {
     setConnectionStatus("connecting");
-    startPeerConnection();
+    const peerConnection = startPeerConnection();
+    setMode("creating");
 
-    const peerConnection = pc.current!;
-    const newId = doc(collection(db, "temp")).id;
-    setMyId(newId);
-    setMode("waiting");
-
-    dataChannel.current = peerConnection.createDataChannel("chat");
-    setupDataChannel();
-
-    const sessionRef = doc(db, "sessions", newId);
-    const offerCandidates = collection(sessionRef, "offerCandidates");
-    const answerCandidates = collection(sessionRef, "answerCandidates");
-
+    const dc = peerConnection.createDataChannel("chat");
+    setupDataChannel(dc);
+    
+    const candidates: RTCIceCandidate[] = [];
     peerConnection.onicecandidate = (event) => {
-      event.candidate && addDoc(offerCandidates, event.candidate.toJSON());
+      if (event.candidate) {
+        candidates.push(event.candidate);
+      }
     };
 
     const offerDescription = await peerConnection.createOffer();
     await peerConnection.setLocalDescription(offerDescription);
-
-    const offer = {
-      sdp: offerDescription.sdp,
-      type: offerDescription.type,
-    };
-    await setDoc(sessionRef, { offer });
-
-    unsubscribe.current = onSnapshot(sessionRef, (snapshot) => {
-      const data = snapshot.data();
-      if (!peerConnection.currentRemoteDescription && data?.answer) {
-        const answerDescription = new RTCSessionDescription(data.answer);
-        peerConnection.setRemoteDescription(answerDescription);
-      }
-    });
-
-    onSnapshot(answerCandidates, (snapshot) => {
-      snapshot.docChanges().forEach((change) => {
-        if (change.type === "added") {
-          const candidate = new RTCIceCandidate(change.doc.data());
-          peerConnection.addIceCandidate(candidate);
+    
+    // Wait for ICE gathering to complete
+    await new Promise<void>((resolve) => {
+      const checkInterval = setInterval(() => {
+        if (peerConnection.iceGatheringState === 'complete') {
+          clearInterval(checkInterval);
+          const offerPayload = {
+            sdp: peerConnection.localDescription,
+            candidates,
+          };
+          setOffer(JSON.stringify(offerPayload));
+          resolve();
         }
-      });
+      }, 100);
     });
+
   }, [startPeerConnection, setupDataChannel]);
 
   const joinSession = useCallback(async () => {
-    if (!friendId) {
+    if (!pastedInfo) {
       toast({
         title: "Error",
-        description: "Please enter a session ID.",
+        description: "Please paste the session info from your friend.",
         variant: "destructive",
       });
       return;
     }
+    
+    try {
+      const offerPayload = JSON.parse(pastedInfo);
+      if (!offerPayload.sdp || !offerPayload.candidates) {
+        throw new Error("Invalid session info");
+      }
 
-    setConnectionStatus("connecting");
-    setMyId(friendId);
-    startPeerConnection();
+      setConnectionStatus("connecting");
+      const peerConnection = startPeerConnection();
+      
+      peerConnection.ondatachannel = (event) => {
+        setupDataChannel(event.channel);
+      };
 
-    const peerConnection = pc.current!;
-    const sessionRef = doc(db, "sessions", friendId);
-    const sessionDoc = await getDoc(sessionRef);
-
-    if (!sessionDoc.exists()) {
-      toast({
-        title: "Error",
-        description: "Session ID not found.",
-        variant: "destructive",
-      });
-      cleanup();
-      return;
-    }
-
-    peerConnection.ondatachannel = (event) => {
-      dataChannel.current = event.channel;
-      setupDataChannel();
-    };
-
-    const offerCandidates = collection(sessionRef, "offerCandidates");
-    const answerCandidates = collection(sessionRef, "answerCandidates");
-
-    peerConnection.onicecandidate = (event) => {
-      event.candidate && addDoc(answerCandidates, event.candidate.toJSON());
-    };
-
-    const offerDescription = sessionDoc.data().offer;
-    await peerConnection.setRemoteDescription(
-      new RTCSessionDescription(offerDescription)
-    );
-
-    const answerDescription = await peerConnection.createAnswer();
-    await peerConnection.setLocalDescription(answerDescription);
-
-    const answer = {
-      type: answerDescription.type,
-      sdp: answerDescription.sdp,
-    };
-    await updateDoc(sessionRef, { answer });
-
-    unsubscribe.current = onSnapshot(offerCandidates, (snapshot) => {
-      snapshot.docChanges().forEach((change) => {
-        if (change.type === "added") {
-          const candidate = new RTCIceCandidate(change.doc.data());
-          peerConnection.addIceCandidate(candidate);
+      const candidates: RTCIceCandidate[] = [];
+      peerConnection.onicecandidate = (event) => {
+        if (event.candidate) {
+          candidates.push(event.candidate);
         }
+      };
+
+      await peerConnection.setRemoteDescription(new RTCSessionDescription(offerPayload.sdp));
+      offerPayload.candidates.forEach((candidate: RTCIceCandidateInit) => {
+        peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
       });
-    });
-  }, [friendId, startPeerConnection, setupDataChannel, toast, cleanup]);
+      
+      const answerDescription = await peerConnection.createAnswer();
+      await peerConnection.setLocalDescription(answerDescription);
+      
+      await new Promise<void>((resolve) => {
+        const checkInterval = setInterval(() => {
+          if (peerConnection.iceGatheringState === 'complete') {
+            clearInterval(checkInterval);
+            const answerPayload = {
+              sdp: peerConnection.localDescription,
+              candidates,
+            };
+            setAnswer(JSON.stringify(answerPayload));
+            resolve();
+          }
+        }, 100);
+      });
+
+    } catch (e) {
+      toast({
+        title: "Error",
+        description: "Invalid session info provided. Please check and try again.",
+        variant: "destructive",
+      });
+      setPastedInfo('');
+    }
+  }, [pastedInfo, startPeerConnection, setupDataChannel, toast]);
+
+  const completeJoin = useCallback(async () => {
+    if(!pastedInfo) return;
+    try {
+      const answerPayload = JSON.parse(pastedInfo);
+       if (!answerPayload.sdp || !answerPayload.candidates) {
+        throw new Error("Invalid session info");
+      }
+
+      await pc.current?.setRemoteDescription(new RTCSessionDescription(answerPayload.sdp));
+      answerPayload.candidates.forEach((candidate: RTCIceCandidateInit) => {
+        pc.current?.addIceCandidate(new RTCIceCandidate(candidate));
+      });
+    } catch(e) {
+        toast({
+        title: "Error",
+        description: "Invalid answer info provided. Please check and try again.",
+        variant: "destructive",
+      });
+      setPastedInfo('');
+    }
+  }, [pastedInfo, toast]);
 
   const sendMessage = () => {
     if (
@@ -280,11 +273,11 @@ export default function ChatClient() {
     setCurrentMessage("");
   };
 
-  const handleCopyId = () => {
-    navigator.clipboard.writeText(myId);
+  const handleCopy = (text: string) => {
+    navigator.clipboard.writeText(text);
     toast({
       title: "Copied!",
-      description: "Session ID copied to clipboard.",
+      description: "Session info copied to clipboard.",
     });
   };
 
@@ -323,55 +316,114 @@ export default function ChatClient() {
           <p className="text-sm text-muted-foreground">OR</p>
           <div className="flex-1 h-px bg-border" />
         </div>
-        <div className="space-y-2">
-          <Input
-            type="text"
-            placeholder="Enter friend's session ID"
-            value={friendId}
-            onChange={(e) => setFriendId(e.target.value)}
-            className="text-center"
-            aria-label="Friend's Session ID"
-          />
-          <Button onClick={joinSession} variant="secondary" className="w-full">
-            Join Chat
-          </Button>
-        </div>
+        <Button onClick={() => setMode('joining')} variant="secondary" className="w-full">
+          Join Chat
+        </Button>
       </CardContent>
     </Card>
   );
 
-  const renderWaiting = () => (
-    <Card className="text-center">
+  const renderCreating = () => (
+    <Card>
       <CardHeader>
-        <CardTitle>Your Session is Ready</CardTitle>
-        <CardDescription>Share this ID with a friend to connect.</CardDescription>
+        <CardTitle>Create Chat Session</CardTitle>
+        <CardDescription>
+          {offer ? "Copy this info and send it to your friend." : "Generating session info..."}
+        </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
-        <div className="relative">
-          <Input
-            type="text"
-            value={myId}
-            readOnly
-            className="text-2xl font-mono text-center h-14 pr-12 bg-muted"
-            aria-label="Your Session ID"
+        {offer ? (
+          <>
+            <div className="relative">
+              <Textarea value={offer} readOnly className="h-32 text-xs font-mono" />
+              <Button
+                onClick={() => handleCopy(offer)}
+                variant="ghost"
+                size="icon"
+                className="absolute right-2 top-2 text-muted-foreground hover:text-foreground"
+              >
+                <Copy className="h-5 w-5" />
+              </Button>
+            </div>
+            <CardDescription>
+              After your friend joins, they will send you back their session info. Paste it below.
+            </CardDescription>
+            <Textarea 
+              value={pastedInfo} 
+              onChange={e => setPastedInfo(e.target.value)} 
+              placeholder="Paste friend's session info here"
+              className="h-32 text-xs font-mono"
+            />
+            <Button onClick={completeJoin} disabled={!pastedInfo} className="w-full">Connect</Button>
+          </>
+        ) : (
+          <div className="flex items-center justify-center space-x-2 text-muted-foreground pt-4">
+            <Loader2 className="animate-spin h-5 w-5" />
+            <span>Generating session...</span>
+          </div>
+        )}
+      </CardContent>
+      <CardFooter className="flex-col gap-2">
+        <Button variant="outline" onClick={cleanup} className="w-full">
+          Cancel
+        </Button>
+      </CardFooter>
+    </Card>
+  );
+
+  const renderJoining = () => (
+    <Card>
+      <CardHeader>
+        <CardTitle>Join Chat Session</CardTitle>
+        {answer ? (
+          <CardDescription>Connection ready. Copy this info and send it back to your friend.</CardDescription>
+        ) : (
+          <CardDescription>Paste the session info from your friend below.</CardDescription>
+        )}
+      </CardHeader>
+      <CardContent className="space-y-4">
+        {answer ? (
+          <div className="relative">
+            <Textarea value={answer} readOnly className="h-32 text-xs font-mono" />
+            <Button
+              onClick={() => handleCopy(answer)}
+              variant="ghost"
+              size="icon"
+              className="absolute right-2 top-2 text-muted-foreground hover:text-foreground"
+            >
+              <Copy className="h-5 w-5" />
+            </Button>
+          </div>
+        ) : (
+          <>
+          <Textarea 
+            value={pastedInfo} 
+            onChange={e => setPastedInfo(e.target.value)} 
+            placeholder="Paste friend's session info here"
+            className="h-32 text-xs font-mono"
           />
-          <Button
-            onClick={handleCopyId}
-            variant="ghost"
-            size="icon"
-            className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
-          >
-            <Copy className="h-6 w-6" />
+          <Button onClick={joinSession} disabled={!pastedInfo} className="w-full">
+            Generate Your Info
           </Button>
-        </div>
-        <div className="flex items-center justify-center space-x-2 text-muted-foreground pt-4">
-          <Loader2 className="animate-spin h-5 w-5" />
-          <span>Waiting for a friend to join...</span>
-        </div>
+          </>
+        )}
+
+        {(connectionStatus === 'connecting' && !answer) && (
+            <div className="flex items-center justify-center space-x-2 text-muted-foreground pt-4">
+                <Loader2 className="animate-spin h-5 w-5" />
+                <span>Generating your connection details...</span>
+            </div>
+        )}
+        {(connectionStatus === 'connecting' && answer) && (
+            <div className="flex items-center justify-center space-x-2 text-muted-foreground pt-4">
+                <Loader2 className="animate-spin h-5 w-5" />
+                <span>Waiting for friend to connect...</span>
+            </div>
+        )}
       </CardContent>
       <CardFooter>
         <Button variant="outline" onClick={cleanup} className="w-full">
-          Cancel
+          <ArrowLeft className="mr-2 h-4 w-4" /> Back
         </Button>
       </CardFooter>
     </Card>
@@ -448,8 +500,10 @@ export default function ChatClient() {
   }
 
   switch (mode) {
-    case "waiting":
-      return renderWaiting();
+    case "creating":
+        return renderCreating();
+    case "joining":
+        return renderJoining();
     case "chatting":
       return renderChatting();
     default:
