@@ -52,8 +52,8 @@ type Message = {
 
 // URL-safe compression and decompression helpers
 const compress = (data: string): string => {
-  const compressed = pako.deflate(data, { to: 'string' });
-  return btoa(compressed)
+  const compressed = pako.deflate(data);
+  return btoa(String.fromCharCode.apply(null, Array.from(compressed)))
     .replace(/\+/g, '-') // Convert '+' to '-'
     .replace(/\//g, '_') // Convert '/' to '_'
     .replace(/=+$/, ''); // Remove padding
@@ -70,7 +70,9 @@ const decompress = (base64Data: string): string => {
       urlSafeData += '=';
     }
     const compressed = atob(urlSafeData);
-    return pako.inflate(compressed, { to: 'string' });
+    const charData = compressed.split('').map(x => x.charCodeAt(0));
+    const binData = new Uint8Array(charData);
+    return pako.inflate(binData, { to: 'string' });
   } catch (e) {
     // If decompression fails, it might be uncompressed data
     return base64Data;
@@ -244,6 +246,8 @@ export default function ChatClient() {
     
     try {
       let info = pastedInfo;
+      // The pasted info might not be valid JSON if it's compressed
+      // so we try to decompress first.
       if (!isValidJson(info)) {
         info = decompress(pastedInfo);
       }
@@ -564,7 +568,7 @@ export default function ChatClient() {
         />
       </CardContent>
       <CardFooter>
-        <Button variant="outline" onClick={() => setMode('home')} className="w-full">
+        <Button variant="outline" onClick={() => setMode("home")} className="w-full">
           <ArrowLeft className="mr-2 h-4 w-4" /> Back
         </Button>
       </CardFooter>
