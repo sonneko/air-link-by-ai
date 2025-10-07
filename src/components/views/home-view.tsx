@@ -24,7 +24,7 @@ export default function HomeView({ onCreateSession, onJoin, onScan }: HomeViewPr
             <MessageSquare className="w-8 h-8" />
           </div>
           <div>
-            <CardTitle className="text-2xl font-bold">WebRTCSpeak</CardTitle>
+            <CardTitle className="text-2xl font-bold">AirLink</CardTitle>
             <CardDescription>Ad-hoc, direct & private chat.</CardDescription>
           </div>
         </div>

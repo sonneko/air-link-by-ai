@@ -3,9 +3,10 @@ import './globals.css';
 import { Toaster } from '@/components/ui/toaster';
 
 export const metadata: Metadata = {
-  title: 'WebRTCSpeak',
+  title: 'AirLink',
   description:
     'A static PWA chat application for ad-hoc, WebRTC-based direct communication.',
+  manifest: '/manifest.json',
 };
 
 export default function RootLayout({
