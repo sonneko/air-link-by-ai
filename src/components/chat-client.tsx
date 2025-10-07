@@ -4,7 +4,7 @@ import { useState, useRef, useEffect, useCallback } from "react";
 import { useToast } from "@/hooks/use-toast";
 import QRCode from "qrcode.react";
 import pako from "pako";
-import { QrScanner } from "@yudiel/react-qr-scanner";
+import { Scanner as QrScanner } from "@yudiel/react-qr-scanner";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -404,7 +404,7 @@ export default function ChatClient() {
                     <DialogTitle>Scan Friend's QR Code</DialogTitle>
                   </DialogHeader>
                   <QrScanner
-                    onDecode={(result) => handleScannedData(result)}
+                    onScan={(result) => handleScannedData(result)}
                     onError={(error) => console.log(error?.message)}
                   />
                 </DialogContent>
@@ -498,7 +498,7 @@ export default function ChatClient() {
       </CardHeader>
       <CardContent>
         <QrScanner
-          onDecode={(result) => {
+          onScan={(result) => {
             handleScannedData(result);
           }}
           onError={(error) => {
