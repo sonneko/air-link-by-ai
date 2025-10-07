@@ -1,4 +1,5 @@
 
+import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -25,6 +26,7 @@ interface CreatingViewProps {
 
 export default function CreatingView({ offer, pastedInfo, setPastedInfo, onCompleteJoin, onCancel }: CreatingViewProps) {
   const { toast } = useToast();
+  const [isScannerOpen, setIsScannerOpen] = useState(false);
 
   const handleCopy = (text: string) => {
     navigator.clipboard.writeText(text);
@@ -69,7 +71,7 @@ export default function CreatingView({ offer, pastedInfo, setPastedInfo, onCompl
                 placeholder="Paste or scan friend's session info"
                 className="h-24 text-xs font-mono"
               />
-              <Dialog>
+              <Dialog open={isScannerOpen} onOpenChange={setIsScannerOpen}>
                 <DialogTrigger asChild>
                   <Button variant="outline" size="icon" aria-label="Scan QR Code"><Scan /></Button>
                 </DialogTrigger>
@@ -81,6 +83,7 @@ export default function CreatingView({ offer, pastedInfo, setPastedInfo, onCompl
                     onScan={(result) => {
                       if (result && result.length > 0 && result[0].rawValue) {
                         setPastedInfo(result[0].rawValue);
+                        setIsScannerOpen(false);
                       }
                     }}
                     onError={(error) => console.log(error?.message)}
