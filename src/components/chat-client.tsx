@@ -4,7 +4,7 @@ import { useState, useRef, useEffect, useCallback } from "react";
 import { useToast } from "@/hooks/use-toast";
 import QRCode from "qrcode.react";
 import pako from "pako";
-import { Scanner as QrScanner } from "@yudiel/react-qr-scanner";
+import { Scanner } from "@yudiel/react-qr-scanner";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -70,6 +70,7 @@ const decompress = (base64Data: string): string => {
 
 export default function ChatClient() {
   const { toast } = useToast();
+  const [isMounted, setIsMounted] = useState(false);
 
   const [mode, setMode] = useState<AppMode>("home");
   const [messages, setMessages] = useState<Message[]>([]);
@@ -85,6 +86,10 @@ export default function ChatClient() {
   const pc = useRef<RTCPeerConnection | null>(null);
   const dataChannel = useRef<RTCDataChannel | null>(null);
   const scrollAreaRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    setIsMounted(true);
+  }, []);
 
   useEffect(() => {
     if (scrollAreaRef.current) {
@@ -403,7 +408,7 @@ export default function ChatClient() {
                   <DialogHeader>
                     <DialogTitle>Scan Friend's QR Code</DialogTitle>
                   </DialogHeader>
-                  <QrScanner
+                  <Scanner
                     onScan={(result) => handleScannedData(result)}
                     onError={(error) => console.log(error?.message)}
                   />
@@ -497,7 +502,7 @@ export default function ChatClient() {
         <CardDescription>Scan the QR code from your friend to join the chat.</CardDescription>
       </CardHeader>
       <CardContent>
-        <QrScanner
+        <Scanner
           onScan={(result) => {
             handleScannedData(result);
           }}
@@ -584,8 +589,8 @@ export default function ChatClient() {
     </Card>
   );
 
-  // Prevent SSR
-  if (typeof window === "undefined") {
+  // Prevent SSR until component is mounted
+  if (!isMounted) {
     return null;
   }
 
