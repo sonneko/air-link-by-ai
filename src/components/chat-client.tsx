@@ -72,7 +72,6 @@ const decompress = (base64Data: string): string => {
     const compressed = atob(urlSafeData);
     return pako.inflate(compressed, { to: 'string' });
   } catch (e) {
-    console.error("Decompression failed", e);
     // If decompression fails, it might be uncompressed data
     return base64Data;
   }
