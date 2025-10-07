@@ -2,6 +2,9 @@
 
 import { useState, useRef, useEffect, useCallback } from "react";
 import { useToast } from "@/hooks/use-toast";
+import QRCode from "qrcode.react";
+import pako from "pako";
+import { QrScanner } from "@yudiel/react-qr-scanner";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -25,7 +28,10 @@ import {
   XCircle,
   Link as LinkIcon,
   ArrowLeft,
+  QrCode,
+  Scan,
 } from "lucide-react";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 
 const servers = {
   iceServers: [
@@ -36,13 +42,31 @@ const servers = {
   iceCandidatePoolSize: 10,
 };
 
-type AppMode = "home" | "creating" | "joining" | "chatting";
+type AppMode = "home" | "creating" | "joining" | "chatting" | "scanning";
 type ConnectionStatus = "disconnected" | "connecting" | "connected" | "failed";
 type Message = {
   text: string;
   sender: "me" | "peer";
   timestamp: string;
 };
+
+// Compression and Decompression helpers
+const compress = (data: string): string => {
+  const compressed = pako.deflate(data, { to: 'string' });
+  return btoa(compressed);
+};
+
+const decompress = (base64Data: string): string => {
+  try {
+    const compressed = atob(base64Data);
+    return pako.inflate(compressed, { to: 'string' });
+  } catch (e) {
+    console.error("Decompression failed", e);
+    // If decompression fails, it might be uncompressed data
+    return base64Data;
+  }
+};
+
 
 export default function ChatClient() {
   const { toast } = useToast();
@@ -158,7 +182,7 @@ export default function ChatClient() {
             sdp: peerConnection.localDescription,
             candidates,
           };
-          setOffer(JSON.stringify(offerPayload));
+          setOffer(compress(JSON.stringify(offerPayload)));
           resolve();
         }
       }, 100);
@@ -166,18 +190,24 @@ export default function ChatClient() {
 
   }, [startPeerConnection, setupDataChannel]);
 
+  const handleScannedData = (data: string) => {
+    setPastedInfo(data);
+    setMode("joining");
+  };
+
   const joinSession = useCallback(async () => {
     if (!pastedInfo) {
       toast({
         title: "Error",
-        description: "Please paste the session info from your friend.",
+        description: "Please paste or scan the session info from your friend.",
         variant: "destructive",
       });
       return;
     }
     
     try {
-      const offerPayload = JSON.parse(pastedInfo);
+      const decompressedInfo = decompress(pastedInfo);
+      const offerPayload = JSON.parse(decompressedInfo);
       if (!offerPayload.sdp || !offerPayload.candidates) {
         throw new Error("Invalid session info");
       }
@@ -212,13 +242,14 @@ export default function ChatClient() {
               sdp: peerConnection.localDescription,
               candidates,
             };
-            setAnswer(JSON.stringify(answerPayload));
+            setAnswer(compress(JSON.stringify(answerPayload)));
             resolve();
           }
         }, 100);
       });
 
     } catch (e) {
+      console.error(e);
       toast({
         title: "Error",
         description: "Invalid session info provided. Please check and try again.",
@@ -231,7 +262,8 @@ export default function ChatClient() {
   const completeJoin = useCallback(async () => {
     if(!pastedInfo) return;
     try {
-      const answerPayload = JSON.parse(pastedInfo);
+      const decompressedInfo = decompress(pastedInfo);
+      const answerPayload = JSON.parse(decompressedInfo);
        if (!answerPayload.sdp || !answerPayload.candidates) {
         throw new Error("Invalid session info");
       }
@@ -316,9 +348,14 @@ export default function ChatClient() {
           <p className="text-sm text-muted-foreground">OR</p>
           <div className="flex-1 h-px bg-border" />
         </div>
-        <Button onClick={() => setMode('joining')} variant="secondary" className="w-full">
-          Join Chat
-        </Button>
+         <div className="flex gap-2">
+          <Button onClick={() => setMode('joining')} variant="secondary" className="w-full">
+            Join Chat
+          </Button>
+          <Button onClick={() => setMode('scanning')} variant="outline" size="icon" aria-label="Scan QR Code">
+            <Scan />
+          </Button>
+        </div>
       </CardContent>
     </Card>
   );
@@ -328,14 +365,17 @@ export default function ChatClient() {
       <CardHeader>
         <CardTitle>Create Chat Session</CardTitle>
         <CardDescription>
-          {offer ? "Copy this info and send it to your friend." : "Generating session info..."}
+          {offer ? "Have your friend scan this QR code or copy the text below." : "Generating session info..."}
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
         {offer ? (
           <>
+            <div className="bg-white p-4 rounded-lg flex justify-center">
+              <QRCode value={offer} size={256} />
+            </div>
             <div className="relative">
-              <Textarea value={offer} readOnly className="h-32 text-xs font-mono" />
+              <Textarea value={offer} readOnly className="h-24 text-xs font-mono" />
               <Button
                 onClick={() => handleCopy(offer)}
                 variant="ghost"
@@ -346,14 +386,30 @@ export default function ChatClient() {
               </Button>
             </div>
             <CardDescription>
-              After your friend joins, they will send you back their session info. Paste it below.
+              After your friend joins, they will send you back their session info. Scan or paste it below.
             </CardDescription>
-            <Textarea 
-              value={pastedInfo} 
-              onChange={e => setPastedInfo(e.target.value)} 
-              placeholder="Paste friend's session info here"
-              className="h-32 text-xs font-mono"
-            />
+            <div className="flex gap-2">
+              <Textarea 
+                value={pastedInfo} 
+                onChange={e => setPastedInfo(e.target.value)} 
+                placeholder="Paste or scan friend's session info"
+                className="h-24 text-xs font-mono"
+              />
+               <Dialog>
+                <DialogTrigger asChild>
+                  <Button variant="outline" size="icon" aria-label="Scan QR Code"><Scan /></Button>
+                </DialogTrigger>
+                <DialogContent>
+                  <DialogHeader>
+                    <DialogTitle>Scan Friend's QR Code</DialogTitle>
+                  </DialogHeader>
+                  <QrScanner
+                    onDecode={(result) => handleScannedData(result)}
+                    onError={(error) => console.log(error?.message)}
+                  />
+                </DialogContent>
+              </Dialog>
+            </div>
             <Button onClick={completeJoin} disabled={!pastedInfo} className="w-full">Connect</Button>
           </>
         ) : (
@@ -376,24 +432,29 @@ export default function ChatClient() {
       <CardHeader>
         <CardTitle>Join Chat Session</CardTitle>
         {answer ? (
-          <CardDescription>Connection ready. Copy this info and send it back to your friend.</CardDescription>
+          <CardDescription>Connection ready. Have your friend scan this QR code or copy the info to send back.</CardDescription>
         ) : (
-          <CardDescription>Paste the session info from your friend below.</CardDescription>
+          <CardDescription>Paste or scan the session info from your friend below.</CardDescription>
         )}
       </CardHeader>
       <CardContent className="space-y-4">
         {answer ? (
-          <div className="relative">
-            <Textarea value={answer} readOnly className="h-32 text-xs font-mono" />
-            <Button
-              onClick={() => handleCopy(answer)}
-              variant="ghost"
-              size="icon"
-              className="absolute right-2 top-2 text-muted-foreground hover:text-foreground"
-            >
-              <Copy className="h-5 w-5" />
-            </Button>
-          </div>
+          <>
+            <div className="bg-white p-4 rounded-lg flex justify-center">
+                <QRCode value={answer} size={256} />
+            </div>
+            <div className="relative">
+              <Textarea value={answer} readOnly className="h-24 text-xs font-mono" />
+              <Button
+                onClick={() => handleCopy(answer)}
+                variant="ghost"
+                size="icon"
+                className="absolute right-2 top-2 text-muted-foreground hover:text-foreground"
+              >
+                <Copy className="h-5 w-5" />
+              </Button>
+            </div>
+          </>
         ) : (
           <>
           <Textarea 
@@ -423,6 +484,35 @@ export default function ChatClient() {
       </CardContent>
       <CardFooter>
         <Button variant="outline" onClick={cleanup} className="w-full">
+          <ArrowLeft className="mr-2 h-4 w-4" /> Back
+        </Button>
+      </CardFooter>
+    </Card>
+  );
+  
+  const renderScanner = () => (
+    <Card>
+      <CardHeader>
+        <CardTitle>Scan QR Code</CardTitle>
+        <CardDescription>Scan the QR code from your friend to join the chat.</CardDescription>
+      </CardHeader>
+      <CardContent>
+        <QrScanner
+          onDecode={(result) => {
+            handleScannedData(result);
+          }}
+          onError={(error) => {
+            console.log(error?.message);
+            toast({
+              title: "Scan Error",
+              description: "Could not scan QR code. Please try again.",
+              variant: "destructive",
+            });
+          }}
+        />
+      </CardContent>
+      <CardFooter>
+        <Button variant="outline" onClick={() => setMode('home')} className="w-full">
           <ArrowLeft className="mr-2 h-4 w-4" /> Back
         </Button>
       </CardFooter>
@@ -504,6 +594,8 @@ export default function ChatClient() {
         return renderCreating();
     case "joining":
         return renderJoining();
+    case "scanning":
+      return renderScanner();
     case "chatting":
       return renderChatting();
     default:
