@@ -50,15 +50,26 @@ type Message = {
   timestamp: string;
 };
 
-// Compression and Decompression helpers
+// URL-safe compression and decompression helpers
 const compress = (data: string): string => {
   const compressed = pako.deflate(data, { to: 'string' });
-  return btoa(compressed);
+  return btoa(compressed)
+    .replace(/\+/g, '-') // Convert '+' to '-'
+    .replace(/\//g, '_') // Convert '/' to '_'
+    .replace(/=+$/, ''); // Remove padding
 };
 
 const decompress = (base64Data: string): string => {
   try {
-    const compressed = atob(base64Data);
+    let urlSafeData = base64Data
+      .replace(/-/g, '+') // Convert '-' back to '+'
+      .replace(/_/g, '/'); // Convert '_' back to '/'
+
+    // Add padding back
+    while (urlSafeData.length % 4) {
+      urlSafeData += '=';
+    }
+    const compressed = atob(urlSafeData);
     return pako.inflate(compressed, { to: 'string' });
   } catch (e) {
     console.error("Decompression failed", e);
@@ -66,7 +77,6 @@ const decompress = (base64Data: string): string => {
     return base64Data;
   }
 };
-
 
 export default function ChatClient() {
   const { toast } = useToast();
@@ -195,8 +205,22 @@ export default function ChatClient() {
 
   }, [startPeerConnection, setupDataChannel]);
 
-  const handleScannedData = (data: string) => {
-    setPastedInfo(data);
+  const handleScannedData = (data: string | {data: string}[]) => {
+    let scannedData: string;
+    if (typeof data === 'string') {
+      scannedData = data;
+    } else if (Array.isArray(data) && data.length > 0 && typeof data[0].data === 'string') {
+      scannedData = data[0].data;
+    } else {
+      console.error("Invalid scan result format", data);
+      toast({
+        title: "Scan Error",
+        description: "Could not read QR code. The format is invalid.",
+        variant: "destructive",
+      });
+      return;
+    }
+    setPastedInfo(scannedData);
     setMode("joining");
   };
 
